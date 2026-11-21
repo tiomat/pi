@@ -35,7 +35,7 @@ function assistantEnd(stopReason: AssistantMessage["stopReason"], errorMessage?:
 const settled: AgentSessionEvent = { type: "agent_settled", aborted: false };
 
 const compactionEnd = (
-	reason: "manual" | "threshold" | "overflow",
+	reason: "manual" | "threshold" | "overflow" | "idle",
 	options: { aborted?: boolean; errorMessage?: string } = {},
 ): AgentSessionEvent => ({
 	type: "compaction_end",

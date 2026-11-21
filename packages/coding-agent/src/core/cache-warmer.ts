@@ -96,6 +96,8 @@ export class CacheWarmer {
 	private readonly decide: (event: CacheWarmingDecisionEvent) => Promise<CacheWarmingAction>;
 	/** Called with the persisted usage entry after each successful refresh. */
 	onWarmed?: (entry: UsageEntry) => void;
+	/** Called once when idle warming reaches its safety limit, while the cache is still warm. */
+	onIdleExpiry?: () => void;
 
 	constructor(
 		models: Pick<ModelRuntime, "streamSimple">,
@@ -179,6 +181,7 @@ export class CacheWarmer {
 		run.phase = "idle";
 		const deadline = run.startedAt + CACHE_WARMING_MAX_IDLE_AGE_MS;
 		if (run.nextWarmAt > deadline || Date.now() >= deadline) {
+			this.onIdleExpiry?.();
 			this.stop("30-minute idle safety limit reached");
 		}
 	}
@@ -218,7 +221,9 @@ export class CacheWarmer {
 		const deadline =
 			run.startedAt + (run.phase === "idle" ? CACHE_WARMING_MAX_IDLE_AGE_MS : CACHE_WARMING_MAX_AGE_MS);
 		if (run.nextWarmAt > deadline || Date.now() >= deadline) {
-			this.stop(run.phase === "idle" ? "30-minute idle safety limit reached" : "one-hour safety limit reached");
+			const idleExpired = run.phase === "idle";
+			if (idleExpired) this.onIdleExpiry?.();
+			this.stop(idleExpired ? "30-minute idle safety limit reached" : "one-hour safety limit reached");
 			return;
 		}
 		run.timer = setTimeout(() => void this.refresh(run), Math.max(0, run.nextWarmAt - Date.now()));

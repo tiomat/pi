@@ -15,10 +15,25 @@ const CompactionModelOverrideSchema = Type.Object({
 	keepRecentTokens: Type.Optional(nonNegativeSafeInteger()),
 });
 
+const IdleCompactionSettingsSchema = Type.Object({
+	enabled: Type.Optional(
+		Type.Boolean({
+			description: "Compact an idle session shortly before its prompt cache expires.",
+			default: SETTINGS_DEFAULTS.compaction.idle.enabled,
+		}),
+	),
+	minTokens: Type.Optional(
+		nonNegativeSafeInteger({
+			default: SETTINGS_DEFAULTS.compaction.idle.minTokens,
+		}),
+	),
+});
+
 const CompactionSettingsSchema = Type.Object({
 	enabled: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.compaction.enabled })),
 	reserveTokens: Type.Optional(nonNegativeSafeInteger({ default: SETTINGS_DEFAULTS.compaction.reserveTokens })),
 	keepRecentTokens: Type.Optional(nonNegativeSafeInteger({ default: SETTINGS_DEFAULTS.compaction.keepRecentTokens })),
+	idle: Type.Optional(IdleCompactionSettingsSchema),
 	modelOverrides: Type.Optional(
 		Type.Record(Type.String(), CompactionModelOverrideSchema, {
 			description: 'Per-model overrides keyed by exact "provider/modelId" strings.',
