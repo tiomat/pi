@@ -289,6 +289,25 @@ describe("cache warming", () => {
 		expect(streaming.warmer.status.reason).toBe("agent run settled");
 	});
 
+	it("fires onIdleExpiry at the idle safety limit before the cache cools", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const { warmer, calls } = fakeRuntime({ decide: () => "warm" });
+		const expired = vi.fn();
+		warmer.onIdleExpiry = expired;
+		warmer.start(request(), current);
+		warmer.onAgentSettled();
+
+		// Five-minute cache warms every 4m30s. After six refreshes (27 minutes),
+		// the next refresh would fall past the 30-minute idle window, so the
+		// handoff fires instead of issuing a seventh warm request.
+		await vi.advanceTimersByTimeAsync(1_800_000);
+
+		expect(calls).toHaveLength(6);
+		expect(expired).toHaveBeenCalledTimes(1);
+		expect(warmer.status).toMatchObject({ state: "inactive", reason: "30-minute idle safety limit reached" });
+	});
+
 	it("aborts replaced requests and does not record failed refreshes", async () => {
 		vi.useFakeTimers();
 		let release!: () => void;
