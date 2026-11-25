@@ -34,6 +34,8 @@ contextTokens > contextWindow - reserveTokens
 
 By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). It only decides when compaction starts. Summary requests use the model's output limit, reduced when needed so input and output fit the context window.
 
+With `compaction.idle.enabled`, an eligible idle session compacts when its one-hour prompt-cache warming window ends. The session must have at least `compaction.idle.minTokens` context tokens (default 100000), and a new prompt before the limit cancels the handoff.
+
 During a multi-turn agent run, Pi checks the canonical projected context after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts during `prepareNextTurn`, then performs the existing catch-up steering poll before `turn_start`. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks before a new user prompt and performs final-attempt overflow recovery after the low-level run ends.
 
 A provider context-overflow error or an early final `stopReason: "length"` can select one compact-and-retry recovery attempt. Length responses with tool calls retain their synthetic failed tool results and follow the ordinary tool/queue scheduler rather than forcing the run to end.
@@ -311,7 +313,7 @@ pi.on("session_before_compact", async (event, ctx) => {
   // preparation.settings - effective settings after applying model overrides
 
   // branchEntries - all entries on current branch (for custom state)
-  // reason - "manual" (/compact), "threshold", or "overflow"
+  // reason - "manual" (/compact), "threshold", "overflow", or "idle"
   // willRetry - whether the aborted turn is retried after compaction (overflow recovery)
   // signal - AbortSignal (pass to LLM calls)
 
@@ -374,7 +376,7 @@ Fired when manual or automatic compaction fails or is aborted. This is useful fo
 ```typescript
 pi.on("session_compact_failed", async (event, ctx) => {
   const { reason, errorMessage, aborted, willRetry, fromExtension } = event;
-  // reason - "manual" (/compact), "threshold", or "overflow"
+  // reason - "manual" (/compact), "threshold", "overflow", or "idle"
   // errorMessage - present for non-abort failures
   // aborted - true for canceled/aborted compactions
   // willRetry - whether the aborted turn would have retried after compaction

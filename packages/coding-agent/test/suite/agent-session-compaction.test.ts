@@ -397,7 +397,7 @@ describe("AgentSession compaction characterization", () => {
 
 	it("notifies extensions when auto-compaction fails", async () => {
 		const failedEvents: Array<{
-			reason: "manual" | "threshold" | "overflow";
+			reason: "manual" | "threshold" | "overflow" | "idle";
 			errorMessage?: string;
 			aborted: boolean;
 			willRetry: boolean;
@@ -537,7 +537,12 @@ describe("AgentSession compaction characterization", () => {
 			await harness.session.prompt("run the large tool");
 
 			expect(order.slice(0, 2)).toEqual(["compaction", "provider"]);
-			expect(observedSettings[0]).toEqual({ enabled: true, reserveTokens: 400, keepRecentTokens: 1750 });
+			expect(observedSettings[0]).toEqual({
+				enabled: true,
+				reserveTokens: 400,
+				keepRecentTokens: 1750,
+				idle: { enabled: false, minTokens: 100000 },
+			});
 			expect(harness.eventsOfType("agent_start")).toHaveLength(agentStartsBefore + 1);
 			expect(harness.eventsOfType("compaction_start").at(-1)).toEqual({
 				type: "compaction_start",

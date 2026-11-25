@@ -33,6 +33,12 @@ export const CACHE_WARMING_MAX_AGE_MS = 60 * 60_000;
 /** Idle warming uses a shorter horizon because continuation estimates become less reliable with age. */
 export const CACHE_WARMING_MAX_IDLE_AGE_MS = 30 * 60_000;
 
+/**
+ * Idle warming for a host that compacts the session when warming ends. One hour keeps the session idle long enough
+ * to be worth compacting, and the compaction still runs on a warm prompt cache.
+ */
+export const CACHE_WARMING_MAX_IDLE_HANDOFF_AGE_MS = 60 * 60_000;
+
 /** A refresh is sent only when it is expected to save at least this many dollars. */
 export const CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS = 0.05;
 

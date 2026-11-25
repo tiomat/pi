@@ -879,16 +879,35 @@ export class SettingsManager {
 		return this.getCompactionTokenSetting("keepRecentTokens", model);
 	}
 
+	getCompactionIdleEnabled(): boolean {
+		return this.settings.compaction?.idle?.enabled ?? SETTINGS_DEFAULTS.compaction.idle.enabled;
+	}
+
+	getCompactionIdleMinTokens(): number {
+		const value = this.settings.compaction?.idle?.minTokens;
+		if (value !== undefined && (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)) {
+			throw new Error(
+				`Invalid compaction.idle.minTokens setting: ${String(value)}. Expected a non-negative safe integer.`,
+			);
+		}
+		return value ?? SETTINGS_DEFAULTS.compaction.idle.minTokens;
+	}
+
 	/** Resolve each token setting through model override, ordinary setting, then built-in default. */
 	getCompactionSettings(model?: Pick<Model<string>, "provider" | "id">): {
 		enabled: boolean;
 		reserveTokens: number;
 		keepRecentTokens: number;
+		idle: { enabled: boolean; minTokens: number };
 	} {
 		return {
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(model),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(model),
+			idle: {
+				enabled: this.getCompactionIdleEnabled(),
+				minTokens: this.getCompactionIdleMinTokens(),
+			},
 		};
 	}
 

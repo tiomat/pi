@@ -10,6 +10,10 @@ export const SETTINGS_DEFAULTS = {
 		enabled: true,
 		reserveTokens: 16384,
 		keepRecentTokens: 20000,
+		idle: {
+			enabled: false,
+			minTokens: 100000,
+		},
 	},
 	branchSummary: {
 		reserveTokens: 16384,

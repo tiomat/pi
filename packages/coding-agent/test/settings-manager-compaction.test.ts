@@ -3,7 +3,12 @@ import { InMemorySettingsStorage, SettingsManager } from "../src/core/settings-m
 
 const model = { provider: "provider", id: "family/model" };
 const modelKey = "provider/family/model";
-const defaults = { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 };
+const defaults = {
+	enabled: true,
+	reserveTokens: 16384,
+	keepRecentTokens: 20000,
+	idle: { enabled: false, minTokens: 100000 },
+};
 
 // Regression coverage for #8133.
 describe("compaction model overrides", () => {
@@ -25,10 +30,16 @@ describe("compaction model overrides", () => {
 			enabled: true,
 			reserveTokens: 400000,
 			keepRecentTokens: 10000,
+			idle: defaults.idle,
 		});
 		expect(manager.getCompactionReserveTokens(model)).toBe(400000);
 		expect(manager.getCompactionKeepRecentTokens(model)).toBe(10000);
-		expect(manager.getCompactionSettings()).toEqual({ enabled: true, reserveTokens: 8192, keepRecentTokens: 10000 });
+		expect(manager.getCompactionSettings()).toEqual({
+			enabled: true,
+			reserveTokens: 8192,
+			keepRecentTokens: 10000,
+			idle: defaults.idle,
+		});
 
 		manager.applyOverrides({ compaction: { modelOverrides: { [modelKey]: { keepRecentTokens: 30000 } } } });
 		expect(manager.getCompactionKeepRecentTokens(model)).toBe(30000);
@@ -40,6 +51,31 @@ describe("compaction model overrides", () => {
 			compaction: { modelOverrides: { [modelKey]: { keepRecentTokens: 1024 } } },
 		});
 		expect(manager.getCompactionSettings(model)).toEqual({ ...defaults, keepRecentTokens: 1024 });
+	});
+
+	it("resolves and validates idle compaction settings", () => {
+		const manager = SettingsManager.inMemory({
+			compaction: { idle: { enabled: true, minTokens: 250_000 } },
+		});
+		expect(manager.getCompactionIdleEnabled()).toBe(true);
+		expect(manager.getCompactionIdleMinTokens()).toBe(250_000);
+		expect(manager.getCompactionSettings(model).idle).toEqual({ enabled: true, minTokens: 250_000 });
+
+		for (const value of [null, -1, 1.5, "100000", true, {}, [], Number.MAX_SAFE_INTEGER + 1]) {
+			const storage = new InMemorySettingsStorage();
+			storage.withLock("global", () => JSON.stringify({ compaction: { idle: { minTokens: value } } }));
+			expect(() => SettingsManager.fromStorage(storage).getCompactionSettings(model)).toThrow(
+				`Invalid compaction.idle.minTokens setting: ${String(value)}. Expected a non-negative safe integer.`,
+			);
+		}
+
+		for (const value of [Number.NaN, Infinity, -Infinity]) {
+			const runtime = SettingsManager.inMemory();
+			runtime.applyOverrides({ compaction: { idle: { minTokens: value } } });
+			expect(() => runtime.getCompactionSettings()).toThrow(
+				`Invalid compaction.idle.minTokens setting: ${String(value)}`,
+			);
+		}
 	});
 
 	it("matches exact provider/model IDs, including IDs containing slashes", () => {
@@ -85,11 +121,13 @@ describe("compaction model overrides", () => {
 			enabled: true,
 			reserveTokens: 400000,
 			keepRecentTokens: 2000,
+			idle: defaults.idle,
 		});
 		expect(manager.getCompactionSettings({ provider: "provider", id: "other" })).toEqual({
 			enabled: true,
 			reserveTokens: 1024,
 			keepRecentTokens: 4096,
+			idle: defaults.idle,
 		});
 		await manager.reload();
 		expect(manager.getCompactionKeepRecentTokens(model)).toBe(2000);
@@ -179,7 +217,12 @@ describe("compaction model overrides", () => {
 		const manager = SettingsManager.inMemory({
 			compaction: { reserveTokens: 0, keepRecentTokens: 0 },
 		});
-		expect(manager.getCompactionSettings(model)).toEqual({ enabled: true, reserveTokens: 0, keepRecentTokens: 0 });
+		expect(manager.getCompactionSettings(model)).toEqual({
+			enabled: true,
+			reserveTokens: 0,
+			keepRecentTokens: 0,
+			idle: defaults.idle,
+		});
 		manager.applyOverrides({
 			compaction: {
 				reserveTokens: 1000,
@@ -187,6 +230,11 @@ describe("compaction model overrides", () => {
 				modelOverrides: { [modelKey]: { reserveTokens: 0, keepRecentTokens: 0 } },
 			},
 		});
-		expect(manager.getCompactionSettings(model)).toEqual({ enabled: true, reserveTokens: 0, keepRecentTokens: 0 });
+		expect(manager.getCompactionSettings(model)).toEqual({
+			enabled: true,
+			reserveTokens: 0,
+			keepRecentTokens: 0,
+			idle: defaults.idle,
+		});
 	});
 });

@@ -1,7 +1,7 @@
 import {
 	type Api,
 	CACHE_WARMING_MAX_AGE_MS,
-	CACHE_WARMING_MAX_IDLE_AGE_MS,
+	CACHE_WARMING_MAX_IDLE_HANDOFF_AGE_MS,
 	CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS,
 	type CacheWarmingAction,
 	type CacheWarmingDecision,
@@ -73,12 +73,16 @@ interface ActiveRun extends CacheWarmRequest {
 	/** Latest safe time to send this refresh, leaving half the original expiry margin. */
 	refreshDeadlineAt: number;
 	startedAt: number;
+	/** When the agent run settled, which is when idle warming starts. */
+	idleStartedAt?: number;
 	controller: AbortController;
 	phase: "streaming" | "idle";
 	nextWarmAt: number;
 	/** Set while a refresh that an extension forced is in flight. */
 	extensionOverride: boolean;
 	timer?: ReturnType<typeof setTimeout>;
+	/** Ends idle warming at the idle limit even while a refresh is in flight. */
+	idleTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -96,6 +100,10 @@ export class CacheWarmer {
 	private readonly decide: (event: CacheWarmingDecisionEvent) => Promise<CacheWarmingAction>;
 	/** Called with the persisted usage entry after each successful refresh. */
 	onWarmed?: (entry: UsageEntry) => void;
+	/** Called once when idle warming reaches its limit, while the cache is still warm. */
+	onIdleExpiry?: () => void;
+	/** Whether idle warming applies to the settled session; a false answer ends warming at settle. */
+	isIdleWarmingEligible?: () => boolean;
 
 	constructor(
 		models: Pick<ModelRuntime, "streamSimple">,
@@ -176,11 +184,16 @@ export class CacheWarmer {
 			this.stop("agent run settled");
 			return;
 		}
+		if (run.phase === "idle") return;
 		run.phase = "idle";
-		const deadline = run.startedAt + CACHE_WARMING_MAX_IDLE_AGE_MS;
-		if (run.nextWarmAt > deadline || Date.now() >= deadline) {
-			this.stop("30-minute idle safety limit reached");
+		run.idleStartedAt = Date.now();
+		if (this.isIdleWarmingEligible && !this.isIdleWarmingEligible()) {
+			this.stop("context below idle warming threshold");
+			return;
 		}
+		// Keep warming to the end of the idle limit; the deadline timer hands off
+		// to idle compaction even if a refresh is still in flight.
+		this.armIdleDeadline(run);
 	}
 
 	/** Reconcile an active run after the persisted warming mode changes. */
@@ -200,6 +213,7 @@ export class CacheWarmer {
 		if (!run) return;
 		this.run = undefined;
 		if (run.timer) clearTimeout(run.timer);
+		if (run.idleTimer) clearTimeout(run.idleTimer);
 		run.controller.abort();
 	}
 
@@ -210,24 +224,57 @@ export class CacheWarmer {
 
 	private schedule(run: ActiveRun): void {
 		run.extensionOverride = false;
-		run.nextWarmAt = Date.now() + run.delayMs;
+		const warmAt = Date.now() + run.delayMs;
 		// A timer can run late after sleep or event-loop blockage. Keep half of
 		// the planned pre-expiry margin for that delay and request dispatch; a
 		// late refresh is likely a full-price cache write, not a cache warm.
-		run.refreshDeadlineAt = run.nextWarmAt + Math.floor((run.ttlMs - run.delayMs) / 2);
-		const deadline =
-			run.startedAt + (run.phase === "idle" ? CACHE_WARMING_MAX_IDLE_AGE_MS : CACHE_WARMING_MAX_AGE_MS);
-		if (run.nextWarmAt > deadline || Date.now() >= deadline) {
-			this.stop(run.phase === "idle" ? "30-minute idle safety limit reached" : "one-hour safety limit reached");
-			return;
+		run.refreshDeadlineAt = warmAt + Math.floor((run.ttlMs - run.delayMs) / 2);
+		if (run.phase === "streaming") {
+			const deadline = run.startedAt + CACHE_WARMING_MAX_AGE_MS;
+			if (warmAt > deadline || Date.now() >= deadline) {
+				this.stop("one-hour safety limit reached");
+				return;
+			}
+			run.nextWarmAt = warmAt;
+		} else {
+			// Idle warming continues to its limit instead of stopping when the next
+			// refresh would fall past it; the deadline timer ends it at the limit.
+			if (!this.armIdleDeadline(run)) return;
+			run.nextWarmAt = Math.min(warmAt, this.idleDeadline(run));
 		}
 		run.timer = setTimeout(() => void this.refresh(run), Math.max(0, run.nextWarmAt - Date.now()));
 		run.timer.unref?.();
 	}
 
+	private idleDeadline(run: ActiveRun): number {
+		return (run.idleStartedAt ?? run.startedAt) + CACHE_WARMING_MAX_IDLE_HANDOFF_AGE_MS;
+	}
+
+	private armIdleDeadline(run: ActiveRun): boolean {
+		if (run.idleTimer !== undefined) return true;
+		const delay = this.idleDeadline(run) - Date.now();
+		if (delay <= 0) {
+			this.expireIdle(run);
+			return false;
+		}
+		run.idleTimer = setTimeout(() => this.expireIdle(run), delay);
+		run.idleTimer.unref?.();
+		return true;
+	}
+
+	private expireIdle(run: ActiveRun): void {
+		if (this.run !== run || run.phase !== "idle") return;
+		this.onIdleExpiry?.();
+		this.stop("one-hour idle limit reached");
+	}
+
 	private async refresh(run: ActiveRun): Promise<void> {
 		run.timer = undefined;
 		if (!this.validateRun(run)) return;
+		if (run.phase === "idle" && Date.now() >= this.idleDeadline(run)) {
+			this.expireIdle(run);
+			return;
+		}
 		if (this.refreshDeadlineMissed(run)) return;
 		const decision = this.evaluate(run);
 		const { warmCost, missCost, continuationProbability } = decision;
@@ -244,6 +291,10 @@ export class CacheWarmer {
 			// Extension failures fall back to pi's own decision.
 		}
 		if (!this.validateRun(run) || this.refreshDeadlineMissed(run)) return;
+		if (run.phase === "idle" && Date.now() >= this.idleDeadline(run)) {
+			this.expireIdle(run);
+			return;
+		}
 		const extensionOverride = action !== decision.action;
 		if (action === "stop") {
 			const reason = extensionOverride

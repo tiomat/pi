@@ -220,13 +220,13 @@ export type AgentSessionEvent =
 			steering: readonly string[];
 			followUp: readonly string[];
 	  }
-	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
+	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" | "idle" }
 	| { type: "entry_appended"; entry: SessionEntry }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
 	| {
 			type: "compaction_end";
-			reason: "manual" | "threshold" | "overflow";
+			reason: "manual" | "threshold" | "overflow" | "idle";
 			result: CompactionResult | undefined;
 			aborted: boolean;
 			willRetry: boolean;
@@ -245,7 +245,7 @@ export type AgentSessionEvent =
 	| {
 			type: "summarization_retry_attempt_start";
 			source: "compaction";
-			reason: "manual" | "threshold" | "overflow";
+			reason: "manual" | "threshold" | "overflow" | "idle";
 	  }
 	| { type: "summarization_retry_finished" }
 	| { type: "bash_execution_update"; id?: string; delta: string };
@@ -277,7 +277,10 @@ export interface AgentSessionConfig {
 	/** Canonical model/auth runtime used by coding-agent internals. */
 	modelRuntime: ModelRuntime;
 	/** Keeps the prompt cache entry of the last session request warm. */
-	cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
+	cacheWarmer?: Pick<
+		CacheWarmer,
+		"cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed" | "onIdleExpiry" | "isIdleWarmingEligible"
+	>;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
 	/**
@@ -503,7 +506,10 @@ export class AgentSession {
 	private _extensionsBound = false;
 
 	private _modelRuntime: ModelRuntime;
-	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
+	private _cacheWarmer?: Pick<
+		CacheWarmer,
+		"cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed" | "onIdleExpiry" | "isIdleWarmingEligible"
+	>;
 
 	// Tool registry for extension getTools/setTools
 	private _toolRegistry: Map<string, AgentTool> = new Map();
@@ -531,6 +537,8 @@ export class AgentSession {
 		this._cacheWarmer = config.cacheWarmer;
 		if (this._cacheWarmer) {
 			this._cacheWarmer.onWarmed = (entry) => this._emit({ type: "entry_appended", entry });
+			this._cacheWarmer.onIdleExpiry = () => void this._runIdleCompaction();
+			this._cacheWarmer.isIdleWarmingEligible = () => this._isIdleRuleEligible();
 		}
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
@@ -2895,7 +2903,7 @@ export class AgentSession {
 		model: Model<any>,
 		customInstructions: string | undefined,
 		signal: AbortSignal,
-		reason: "manual" | "threshold" | "overflow",
+		reason: "manual" | "threshold" | "overflow" | "idle",
 	): Promise<CompactionResult> {
 		// Resolve the request only when Pi summarizes itself: routing may call models or fail.
 		const request = await this._getSummarizationRequestAuth(model, signal);
@@ -3255,6 +3263,27 @@ export class AgentSession {
 	}
 
 	/**
+	 * Idle compaction entry point: when an idle session's prompt cache is about to
+	 * expire, compact it while the cache is still warm so a later return does not
+	 * reprocess the full history. Fires once per idle epoch from CacheWarmer.
+	 */
+	private async _runIdleCompaction(): Promise<void> {
+		// A prompt in preflight is a user return: it must not race the handoff.
+		if (!this.isIdle || this._promptPreflightCount > 0) return;
+		const model = this.model;
+		if (!model) return;
+		const settings = this.settingsManager.getCompactionSettings(model);
+		if (!settings.enabled || !settings.idle.enabled || !this._isIdleRuleEligible()) return;
+		await this._runAutoCompaction("idle", false);
+	}
+
+	/** Whether the session has enough context for the idle warming and compaction rule. */
+	private _isIdleRuleEligible(): boolean {
+		const tokens = estimateContextTokens(this.agent.state.messages).tokens;
+		return tokens >= this.settingsManager.getCompactionIdleMinTokens();
+	}
+
+	/**
 	 * Execute threshold or overflow compaction. Manual compaction uses
 	 * `AgentSession.compact()` instead. Both paths call the lower-level `compact()`
 	 * function imported from `./compaction/index.ts` after preparation and extension
@@ -3264,7 +3293,7 @@ export class AgentSession {
 	 * @param willRetry Whether to continue the interrupted turn after overflow compaction
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+	private async _runAutoCompaction(reason: "overflow" | "threshold" | "idle", willRetry: boolean): Promise<boolean> {
 		const model = this.model;
 		const settings = this.settingsManager.getCompactionSettings(model);
 		let abortController: AbortController | undefined;
@@ -3893,7 +3922,9 @@ export class AgentSession {
 	 * the TUI needs to render the retry and recreate the underlying indicator.
 	 */
 	private _summarizationRetryCallbacks(
-		source: { source: "branchSummary" } | { source: "compaction"; reason: "manual" | "threshold" | "overflow" },
+		source:
+			| { source: "branchSummary" }
+			| { source: "compaction"; reason: "manual" | "threshold" | "overflow" | "idle" },
 	): RetryCallbacks {
 		return {
 			onRetryScheduled: (attempt, maxAttempts, delayMs, errorMessage) => {
