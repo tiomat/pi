@@ -539,7 +539,7 @@ Fired on compaction. See [compaction.md](compaction.md) for details.
 pi.on("session_before_compact", async (event, ctx) => {
   const { preparation, branchEntries, customInstructions, reason, willRetry, signal } = event;
 
-  // reason - "manual" (/compact), "threshold", or "overflow"
+  // reason - "manual" (/compact), "threshold", "overflow", or "idle"
   // willRetry - whether the aborted turn is retried after compaction (overflow recovery)
 
   // Cancel:
@@ -559,12 +559,12 @@ pi.on("session_before_compact", async (event, ctx) => {
 pi.on("session_compact", async (event, ctx) => {
   // event.compactionEntry - the saved compaction
   // event.fromExtension - whether extension provided it
-  // event.reason - "manual" (/compact), "threshold", or "overflow"
+  // event.reason - "manual" (/compact), "threshold", "overflow", or "idle"
   // event.willRetry - whether the aborted turn is retried after compaction (overflow recovery)
 });
 
 pi.on("session_compact_failed", async (event, ctx) => {
-  // event.reason - "manual" (/compact), "threshold", or "overflow"
+  // event.reason - "manual" (/compact), "threshold", "overflow", or "idle"
   // event.errorMessage - present for non-abort failures
   // event.aborted - true for cancelled/aborted compactions
   // event.willRetry - whether the aborted turn would have retried after compaction

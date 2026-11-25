@@ -279,7 +279,7 @@ export interface AgentSessionConfig {
 	/** Keeps the prompt cache entry of the last session request warm. */
 	cacheWarmer?: Pick<
 		CacheWarmer,
-		"cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed" | "onIdleExpiry"
+		"cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed" | "onIdleExpiry" | "isIdleWarmingEligible"
 	>;
 	/** Initial active built-in tool names. Default: [read, bash, edit, write] */
 	initialActiveToolNames?: string[];
@@ -508,7 +508,7 @@ export class AgentSession {
 	private _modelRuntime: ModelRuntime;
 	private _cacheWarmer?: Pick<
 		CacheWarmer,
-		"cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed" | "onIdleExpiry"
+		"cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed" | "onIdleExpiry" | "isIdleWarmingEligible"
 	>;
 
 	// Tool registry for extension getTools/setTools
@@ -538,6 +538,7 @@ export class AgentSession {
 		if (this._cacheWarmer) {
 			this._cacheWarmer.onWarmed = (entry) => this._emit({ type: "entry_appended", entry });
 			this._cacheWarmer.onIdleExpiry = () => void this._runIdleCompaction();
+			this._cacheWarmer.isIdleWarmingEligible = () => this._isIdleRuleEligible();
 		}
 		this._extensionRunnerRef = config.extensionRunnerRef;
 		this._initialActiveToolNames = config.initialActiveToolNames;
@@ -3267,14 +3268,19 @@ export class AgentSession {
 	 * reprocess the full history. Fires once per idle epoch from CacheWarmer.
 	 */
 	private async _runIdleCompaction(): Promise<void> {
-		if (!this.isIdle) return;
+		// A prompt in preflight is a user return: it must not race the handoff.
+		if (!this.isIdle || this._promptPreflightCount > 0) return;
 		const model = this.model;
 		if (!model) return;
 		const settings = this.settingsManager.getCompactionSettings(model);
-		if (!settings.enabled || !settings.idle.enabled) return;
-		const tokens = estimateContextTokens(this.agent.state.messages).tokens;
-		if (tokens < settings.idle.minTokens) return;
+		if (!settings.enabled || !settings.idle.enabled || !this._isIdleRuleEligible()) return;
 		await this._runAutoCompaction("idle", false);
+	}
+
+	/** Whether the session has enough context for the idle warming and compaction rule. */
+	private _isIdleRuleEligible(): boolean {
+		const tokens = estimateContextTokens(this.agent.state.messages).tokens;
+		return tokens >= this.settingsManager.getCompactionIdleMinTokens();
 	}
 
 	/**

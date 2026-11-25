@@ -12,7 +12,7 @@ export const SETTINGS_DEFAULTS = {
 		keepRecentTokens: 20000,
 		idle: {
 			enabled: false,
-			minTokens: 50000,
+			minTokens: 100000,
 		},
 	},
 	branchSummary: {

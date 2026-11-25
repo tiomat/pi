@@ -289,7 +289,7 @@ describe("cache warming", () => {
 		expect(streaming.warmer.status.reason).toBe("agent run settled");
 	});
 
-	it("fires onIdleExpiry at the idle safety limit before the cache cools", async () => {
+	it("warms an eligible idle session for one hour and hands off once before the cache cools", async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(0);
 		const { warmer, calls } = fakeRuntime({ decide: () => "warm" });
@@ -298,14 +298,64 @@ describe("cache warming", () => {
 		warmer.start(request(), current);
 		warmer.onAgentSettled();
 
-		// Five-minute cache warms every 4m30s. After six refreshes (27 minutes),
-		// the next refresh would fall past the 30-minute idle window, so the
-		// handoff fires instead of issuing a seventh warm request.
-		await vi.advanceTimersByTimeAsync(1_800_000);
+		// Five-minute cache warms every 4m30s. Thirteen refreshes keep it warm
+		// through 58m30s; warming holds the cache until the one-hour idle limit
+		// and then hands off instead of issuing a fourteenth refresh.
+		await vi.advanceTimersByTimeAsync(3_599_000);
+		expect(expired).not.toHaveBeenCalled();
+		expect(warmer.status.state).toBe("scheduled");
+		await vi.advanceTimersByTimeAsync(1_000);
 
-		expect(calls).toHaveLength(6);
+		expect(calls).toHaveLength(13);
 		expect(expired).toHaveBeenCalledTimes(1);
-		expect(warmer.status).toMatchObject({ state: "inactive", reason: "30-minute idle safety limit reached" });
+		expect(warmer.status).toMatchObject({ state: "inactive", reason: "one-hour idle limit reached" });
+
+		await vi.advanceTimersByTimeAsync(3_600_000);
+		expect(calls).toHaveLength(13);
+		expect(expired).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not warm an idle session the host excludes from the idle rule", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const { warmer, calls } = fakeRuntime();
+		const expired = vi.fn();
+		warmer.onIdleExpiry = expired;
+		warmer.isIdleWarmingEligible = () => false;
+		warmer.start(request(), current);
+		warmer.onAgentSettled();
+
+		expect(warmer.status).toMatchObject({
+			state: "inactive",
+			reason: "context below idle warming threshold",
+		});
+		await vi.advanceTimersByTimeAsync(3_600_000);
+
+		expect(calls).toHaveLength(0);
+		expect(expired).not.toHaveBeenCalled();
+	});
+
+	it("cancels the idle handoff when a new request arrives before the limit", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+		const { warmer, calls } = fakeRuntime({ branch: branchWithPrompt(400_000) });
+		const expired = vi.fn();
+		warmer.onIdleExpiry = expired;
+		warmer.start(request(), current);
+		warmer.onAgentSettled();
+
+		await vi.advanceTimersByTimeAsync(3_540_000);
+		expect(calls).toHaveLength(13);
+
+		// A real request replaces the idle run; the old deadline must not fire.
+		warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(60_000);
+		expect(expired).not.toHaveBeenCalled();
+		expect(warmer.status.state).toBe("scheduled");
+
+		await vi.advanceTimersByTimeAsync(3_600_000);
+		expect(expired).not.toHaveBeenCalled();
+		warmer.cancel();
 	});
 
 	it("aborts replaced requests and does not record failed refreshes", async () => {

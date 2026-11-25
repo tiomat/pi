@@ -2,7 +2,7 @@ import { type Static, type TSchemaOptions, Type } from "typebox";
 import { ModelThinkingLevelSchema } from "./pi-ai-schemas.ts";
 import { SETTINGS_DEFAULTS } from "./settings-defaults.ts";
 
-function nonNegativeSafeInteger(options: { default?: number } = {}) {
+function nonNegativeSafeInteger(options: { default?: number; description?: string } = {}) {
 	return Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, ...options });
 }
 
@@ -18,12 +18,13 @@ const CompactionModelOverrideSchema = Type.Object({
 const IdleCompactionSettingsSchema = Type.Object({
 	enabled: Type.Optional(
 		Type.Boolean({
-			description: "Compact an idle session shortly before its prompt cache expires.",
+			description: "Compact an eligible idle session when its cache-warming window ends.",
 			default: SETTINGS_DEFAULTS.compaction.idle.enabled,
 		}),
 	),
 	minTokens: Type.Optional(
 		nonNegativeSafeInteger({
+			description: "Minimum context tokens for idle cache warming and the compaction that follows it.",
 			default: SETTINGS_DEFAULTS.compaction.idle.minTokens,
 		}),
 	),

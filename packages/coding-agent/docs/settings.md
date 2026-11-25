@@ -18,7 +18,7 @@ Add `"$schema": "https://pi.dev/schemas/settings.schema.json"` to `settings.json
 | `enabledModels` | `string[]` | All available models | Model patterns used for startup selection and model cycling. Uses the same format as `--models`. |
 | `hideThinkingBlock` | boolean | `false` | Hide thinking blocks in the transcript. |
 | `showCacheMissNotices` | boolean | `false` | Show notices for significant cache misses, successful cache warming, compaction usage, and provider recovery. |
-| `cacheWarming` | `"off" \| "streaming" \| "idle"` | `"idle"` | Keep eligible provider prompt caches warm during active runs and, with `"idle"`, for up to 30 minutes between runs. `"streaming"` warms only during active runs. Global setting only. |
+| `cacheWarming` | `"off" \| "streaming" \| "idle"` | `"idle"` | Keep eligible provider prompt caches warm during active runs and, with `"idle"`, for up to an hour between runs. Idle warming applies only to sessions with at least `compaction.idle.minTokens` context tokens. `"streaming"` warms only during active runs. Global setting only. |
 
 Cache warming runs only when the model declares a cache lifetime and Pi estimates at least $0.05 in avoided cache-miss cost. Refresh usage counts toward session totals but does not enter model context. `/session` shows the next decision; extensions can override it with `cache_warming_decision`. See [Prompt Cache Lifetimes](models.md#prompt-cache-lifetimes).
 
@@ -73,11 +73,15 @@ CLI tool options override this setting for one invocation. `--tools` with only `
 | `compaction.enabled` | boolean | `true` | Enable automatic compaction. |
 | `compaction.reserveTokens` | number | `16384` | Free context tokens below which automatic compaction starts. |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens retained without summarization. |
+| `compaction.idle.enabled` | boolean | `false` | Compact an eligible idle session when its one-hour cache-warming window ends. |
+| `compaction.idle.minTokens` | number | `100000` | Minimum context tokens for idle cache warming and the compaction that follows it. |
 | `compaction.modelOverrides` | object | None | Per-model token settings keyed by exact `provider/modelId`. |
 
 <a id="per-model-compaction-overrides"></a>
 
 Compaction token values must be non-negative safe integers. Each value resolves independently from the matching model override, then the ordinary compaction setting, then the built-in default. Project and user objects merge before model lookup.
+
+Idle compaction is off by default. A session with at least `compaction.idle.minTokens` context tokens keeps its prompt cache warm for up to an hour after its run settles; when idle compaction is enabled, it compacts at the end of that window while the cache is still warm. A new prompt cancels the pending handoff.
 
 See [Compaction Reference](compaction.md) for trigger, summarization, and validation behavior.
 

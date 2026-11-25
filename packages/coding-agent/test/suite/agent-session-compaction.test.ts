@@ -541,7 +541,7 @@ describe("AgentSession compaction characterization", () => {
 				enabled: true,
 				reserveTokens: 400,
 				keepRecentTokens: 1750,
-				idle: { enabled: false, minTokens: 50000 },
+				idle: { enabled: false, minTokens: 100000 },
 			});
 			expect(harness.eventsOfType("agent_start")).toHaveLength(agentStartsBefore + 1);
 			expect(harness.eventsOfType("compaction_start").at(-1)).toEqual({
